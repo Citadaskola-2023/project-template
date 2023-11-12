@@ -1,5 +1,11 @@
 {
     "name": "citadaskola-2023/project-template",
+    "authors": [
+        {
+            "name": "Roberts Rožkalns",
+            "email": "roberts.rozkalns@citadaskola.lv"
+        }
+    ],
     "type": "project",
     "license": "MIT",
     "minimum-stability": "stable",
