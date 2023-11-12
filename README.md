@@ -14,7 +14,6 @@ docker run --rm -it \
     ```shell
     docker run -v $PWD:/app \
         -p 80:80 -p 443:443 \
-        --n
         dunglas/frankenphp
     ```
 3. Go to https://localhost, and enjoy!
