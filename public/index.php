@@ -83,9 +83,9 @@ readonly class Stations
     }
 }
 
-class HistoricalMeteoData
+readonly class HistoricalMeteoData
 {
-    private array $records = [];
+    private array $records;
 
     public function __construct(
         private readonly DataGovLv $api,
@@ -95,7 +95,7 @@ class HistoricalMeteoData
         $this->fetchData();
     }
 
-    private function fetchData()
+    private function fetchData(): void
     {
         $this->records = $this->api->getResults(GovData::HistoricalData, [
             'q' => (string) $this->filter,
