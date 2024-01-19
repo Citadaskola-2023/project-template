@@ -17,9 +17,11 @@ require_once  dirname(__DIR__) . '/vendor/autoload.php';
 
 // izmantojam: file_get_contents();
 
-enum GovData: string {
-    public const BASEURL = 'https://data.gov.lv/dati/lv/api/3/action/datastore_search';
+$city = $_GET['city'] ?? '';  // https://localhost/?city=Li
+$date = $_GET['date'] ?? date('Y-m-d', strtotime('yesterday')); // https://localhost/?city=Li&date=2023-01-20
 
+enum GovData: string
+{
     case Stations = '79e707d8-6719-49b2-92b1-ec261451f1d9';
     case HistoricalData = 'ecc62e27-2071-483c-bca9-5e53d979faa8';
 
@@ -29,68 +31,141 @@ enum GovData: string {
     }
 }
 
-
-$city = $_GET['city'] ?? '';  // https://localhost/?city=Li
-
-if (!$city) {  // https://localhost/?city=
-    throw new \InvalidArgumentException('Izvēlies pilsētu');
-}
-
-function getResults(GovData $resource, array $params = []): array
+class DataGovLv
 {
-    $params = http_build_query(array_merge([
-        'resource_id' => $resource->getResourceId(),
-    ], $params));
+    private const BASEURL = 'https://data.gov.lv/dati/lv/api/3/action/datastore_search';
 
-    $url = GovData::BASEURL . '?' . $params;
+    public function getResults(GovData $resource, array $params = []): array
+    {
+        $params = http_build_query(array_merge([
+            'resource_id' => $resource->getResourceId(),
+        ], $params));
 
-    $contents = file_get_contents($url);
-    $json = json_decode($contents);
+        $url = self::BASEURL . '?' . $params;
 
-    return $json->result->records;
+        $contents = file_get_contents($url);
+        $json = json_decode($contents);
+
+        return $json->result->records;
+    }
 }
 
-$records = getResults(GovData::Stations);
+readonly class Stations
+{
+    public function __construct(
+        private DataGovLv $api
+    )
+    {
+    }
 
-$filtered = array_filter($records, function ($record) use ($city) {
-    return str_contains(strtolower($record->NAME), strtolower($city));
-});
+    public function getMeteoStationByCityName(string $name = '')
+    {
+        if (!$name) {
+            throw new \InvalidArgumentException('Izvēlies pilsētu');
+        }
 
-if (!count($filtered)) { // https://localhost/?city=y - 0 ierakstu
-    throw new \InvalidArgumentException('Neatradām staciju');
+        $filtered = array_filter(
+            $this->api->getResults(GovData::Stations),
+            fn($station) => str_contains(strtolower($station->NAME), strtolower($name))
+        );
+
+        if (!count($filtered)) { // https://localhost/?city=y - 0 ierakstu
+            throw new \InvalidArgumentException('Neatradām staciju');
+        }
+
+        if (count($filtered) > 1) { // https://localhost/?city=Li - 3 ieraksti
+            throw new \InvalidArgumentException('Pārāk daudz rezultāti, esi precīzāks');
+        }
+
+        $one = current($filtered);
+
+        return $one->STATION_ID;
+    }
 }
 
-if (count($filtered) > 1) { // https://localhost/?city=Li - 3 ieraksti
-    throw new \InvalidArgumentException('Pārāk daudz rezultāti, esi precīzāks');
+class HistoricalMeteoData
+{
+    private array $records = [];
+
+    public function __construct(
+        private readonly DataGovLv $api,
+        private readonly HistoricalDataFilter $filter
+    )
+    {
+        $this->fetchData();
+    }
+
+    private function fetchData()
+    {
+        $this->records = $this->api->getResults(GovData::HistoricalData, [
+            'q' => (string) $this->filter,
+        ]);
+
+        if (!count($this->records)) {
+            throw new InvalidArgumentException('Nav vēsturisko datu');
+        }
+    }
+
+    public function getAverage(): float
+    {
+        $total = 0;
+        foreach ($this->records as $record) {
+            $total += $record->VALUE;
+        }
+
+        return $total / count($this->records);
+    }
+
+    public function getAtTime(int $hour = 8): float
+    {
+        $str = sprintf('T%02d:00:00', $hour);
+        $filtered = array_filter($this->records, fn ($record) => str_ends_with($record->DATETIME, $str));
+
+        return current($filtered)->VALUE;
+    }
+
+    public function getMin(): float
+    {
+        $values = array_map(fn ($record) => $record->VALUE, $this->records);
+        return min($values);
+    }
+
+    public function getMax(): float
+    {
+        $values = array_map(fn ($record) => $record->VALUE, $this->records);
+        return max($values);
+    }
 }
 
-$station = current($filtered);
+class HistoricalDataFilter
+{
+    public function __construct(
+        public string $stationId,
+        public string $type,
+        public string $date,
+    )
+    {
+    }
 
-$stationId = $station->STATION_ID;
-
-// --- END TODO 1 ---
-
-$date = $_GET['date'] ?? date('Y-m-d', strtotime('yesterday')); // https://localhost/?city=Li&date=2023-01-20
-
-$records = getResults(GovData::HistoricalData, [
-    'q' => implode(',', ['TDRY', $date, $stationId]),
-]);
-
-if (!count($records)) {
-    throw new InvalidArgumentException(
-        'Nav datu, pēc kā aparēķināt vidējo temperatūru stacijā ' . $station->NAME
-    );
+    public function __toString(): string
+    {
+        return implode(',', [$this->type, $this->stationId, $this->date]);
+    }
 }
 
-$total = 0;
-foreach ($records as $record) {
-    $total += $record->VALUE;
+
+try {
+    $api = new DataGovLv();
+    $station = (new Stations($api))->getMeteoStationByCityName($city);
+    $meteoData = new HistoricalMeteoData($api, new HistoricalDataFilter($station, 'TDRY', $date));
+
+    dump('avg: ' . round($meteoData->getAverage(), 2));
+    dump('at 2PM: ' . $meteoData->getAtTime(14));
+    dump('min: '. $meteoData->getMin());
+    dump('max: ' . $meteoData->getMax());
+} catch (Exception $e) {
+    dump('Diemžēl nevarēja ielasīt datus. Kļūda: ' . $e->getMessage());
 }
 
-$average = $total / count($records);
-
-dump($average);
-
-dump('https://ej.uz/salida');
 
 
